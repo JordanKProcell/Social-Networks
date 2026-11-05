@@ -1,0 +1,153 @@
+---
+title: "UN Voting"
+format: pdf
+---
+
+```{r}
+
+#| echo: true
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(data.table)
+library(igraph)
+
+votes_data <- read_csv(file.path("~/Desktop", "Voting by UN.csv"))  
+
+# 2. Extract the year safely
+votes_data <- votes_data %>%   
+  mutate(
+    year_text = sub(".*/", "", date),  
+    year_num = as.numeric(year_text), 
+    year = ifelse(year_num < 100, year_num + 2000, year_num)  
+  )
+
+target_countries <- c(
+  "UNITED STATES",
+  "GERMANY", 
+  "CHINA", 
+  "RUSSIA", 
+  "JAPAN", 
+  "UNITED KINGDOM", 
+  "CANADA", 
+  "SPAIN", 
+  "MEXICO", 
+  "INDIA", 
+  "AUSTRALIA")
+
+
+y_votes <- votes_data %>%  
+  dplyr::filter(ms_vote == "Y") %>%   
+  dplyr::filter(year >= 2000 & year <= 2026) %>%
+  dplyr::filter(tolower(ms_name) %in% tolower(target_countries) | 
+                grepl("United States|United Kingdom|Russian|Korea", ms_name, ignore.case = TRUE)) %>%
+  select(ms_name, resolution, date) %>%
+  # === ADDED CLEANING STEP: Standardize the long names to your exact targets ===
+  mutate(ms_name = case_when(
+    grepl("Russia", ms_name, ignore.case = TRUE) ~ "RUSSIA",
+    grepl("Korea", ms_name, ignore.case = TRUE)  ~ "SOUTH KOREA",
+    grepl("United States|USA", ms_name, ignore.case = TRUE) ~ "UNITED STATES",
+    grepl("United Kingdom|UK", ms_name, ignore.case = TRUE) ~ "UNITED KINGDOM",
+    TRUE ~ toupper(ms_name) # Makes all other countries uppercase to match your style
+  ))
+
+setDT(y_votes)
+
+counted_pairs <- y_votes[y_votes, 
+                         on = .(resolution, date), 
+                         allow.cartesian = TRUE][
+                           ms_name != i.ms_name,            
+                           .N,                              
+                           by = .(ms_name, i.ms_name)]     
+
+setnames(counted_pairs, c("ms_name", "i.ms_name", "N"), c("ms_name_A", "ms_name_B", "n"))
+
+rm(y_votes, votes_data)
+gc()
+
+
+adj_matrix <- counted_pairs %>%   
+  pivot_wider(names_from = ms_name_B, values_from = n, values_fill = 0) %>%   
+  column_to_rownames(var = "ms_name_A") %>%   
+  as.matrix()  
+
+n <- graph_from_adjacency_matrix(
+  adj_matrix, 
+  mode = "undirected", 
+  weighted = TRUE, 
+  diag = FALSE
+)
+
+summary(n)
+
+
+bloc_mapping <- data.frame(
+  name = c("UNITED STATES", "UNITED KINGDOM", "CANADA", "GERMANY", "SPAIN", "JAPAN", "AUSTRALIA", 
+           "CHINA", "RUSSIA", 
+           "SOUTH KOREA", "INDIA", "MEXICO"),
+  bloc_color = c("skyblue", "skyblue", "skyblue", "skyblue", "skyblue", "skyblue", "skyblue",
+                  "tomato", "tomato",
+                  "gold", "forestgreen", "forestgreen")
+)
+
+# Match the colors onto the network nodes
+v_names <- vertex_attr(n, "name")
+node_colors <- bloc_mapping$bloc_color[match(v_names, bloc_mapping$name)]
+n <- set_vertex_attr(n, "color", value = node_colors)
+
+country_labels <- vertex_attr(n, "name")
+raw_weights <- edge_attr(n, "weight")
+
+
+min_w <- min(raw_weights)
+max_w <- max(raw_weights)
+scaled_edge_widths <- ((raw_weights - min_w) / (max_w - min_w)) * 8 + 0.5
+
+
+edge_colors <- ifelse(raw_weights > (max_w - (max_w - min_w)*0.15), 
+                      rgb(0.1, 0.1, 0.1, 0.7),   # Dark gray for strongest ties
+                      rgb(0.6, 0.6, 0.6, 0.2))  # Faint gray for standard ties
+
+
+par(mar = c(4, 1, 3, 1))
+
+plot(n,
+  layout = layout_with_fr,                 # Keeps factions clearly separated
+  vertex.size = 24,                        # Easy to read node sizes
+  vertex.label = country_labels,      
+  vertex.label.cex = 0.7,                 # Bold, sharp text labels
+  vertex.label.font = 2,                   
+  vertex.label.color = "black",         
+  edge.width = scaled_edge_widths,         # Maps true alignment to line thickness
+  edge.color = edge_colors,                # Highlights the absolute strongest alliances
+  main = "UN Voting Alignment Factions (2000-2026)\nRelative Relationship Strength"
+)
+
+# Add the Key (Legend) to the bottom left corner
+legend("bottomleft", 
+       legend = c("Western / G7 Allies", "Eastern / BRICS Core", "South Korea / East Asia", "Global South / Non-Aligned"), 
+       fill = c("skyblue", "tomato", "gold", "forestgreen"), 
+       bty = "n", 
+       cex = 0.8,
+       title = "Geopolitical Blocs")
+
+cat("\n======================================================\n")
+cat("   TOP 5 STRONGEST VOTING ALLIANCES (HIGHEST OVERLAP)   \n")
+cat("======================================================\n")
+top_allies <- counted_pairs %>%
+  dplyr::filter(ms_name_A < ms_name_B) %>% # Removes duplicate combinations (A-B vs B-A)
+  arrange(desc(n)) %>%
+  head(5)
+
+print(top_allies)
+```
+
+```
+
+
+
+
+
+
+The `echo: false` option disables the printing of code (only output is displayed).
